@@ -29,8 +29,7 @@ const (
 )
 
 type Publisher struct {
-	ch   *amqp091.Channel
-	conn *amqp091.Connection
+	ch *amqp091.Channel
 
 	locker sync.Mutex
 
@@ -55,8 +54,13 @@ func NewPublisher(ch *amqp091.Channel, exchange string, routingKey string) *Publ
 	return &Publisher{ch: ch, headers: map[string]interface{}{}, exchange: exchange, routingKey: routingKey}
 }
 
-func NewPublisherWithChannel(conn *amqp091.Connection, exchange string, routingKey string) *Publisher {
-	return &Publisher{conn: conn, headers: map[string]interface{}{}, exchange: exchange, routingKey: routingKey}
+func NewPublisherWithChannel(conn *amqp091.Connection, exchange string, routingKey string) (*Publisher, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Publisher{ch: ch, headers: map[string]interface{}{}, exchange: exchange, routingKey: routingKey}, nil
 }
 
 func (p *Publisher) SetDataTypeBytes() *Publisher {
@@ -169,17 +173,12 @@ func (p *Publisher) Publish(ctx context.Context, data interface{}) error {
 	p.locker.Lock()
 	defer p.locker.Unlock()
 
-	ch, err := p.getChannel()
-	if err != nil {
-		return err
-	}
-
 	body, err := p.makeData(data)
 	if err != nil {
 		return err
 	}
 
-	return ch.PublishWithContext(ctx, p.exchange, p.routingKey, p.mandatory, p.immediate, amqp091.Publishing{
+	return p.ch.PublishWithContext(ctx, p.exchange, p.routingKey, p.mandatory, p.immediate, amqp091.Publishing{
 		Headers:       p.headers,
 		ContentType:   p.contentType,
 		DeliveryMode:  p.deliveryMode,
@@ -198,11 +197,6 @@ func (p *Publisher) PublishAwaitResponse(
 
 	p.locker.Lock()
 	defer p.locker.Unlock()
-
-	connectionChannel, err := p.getChannel()
-	if err != nil {
-		return amqp091.Delivery{}, err
-	}
 
 	if p.responseTimeout == 0 {
 		return amqp091.Delivery{}, ResponseTimeoutNotSetError
@@ -225,7 +219,7 @@ func (p *Publisher) PublishAwaitResponse(
 		return amqp091.Delivery{}, err
 	}
 
-	err = connectionChannel.PublishWithContext(ctx, p.exchange, p.routingKey, p.mandatory, p.immediate, amqp091.Publishing{
+	err = p.ch.PublishWithContext(ctx, p.exchange, p.routingKey, p.mandatory, p.immediate, amqp091.Publishing{
 		Headers:       p.headers,
 		ContentType:   p.contentType,
 		DeliveryMode:  p.deliveryMode,
@@ -250,17 +244,12 @@ func (p *Publisher) PublishWithConfirmation(ctx context.Context, data interface{
 	p.locker.Lock()
 	defer p.locker.Unlock()
 
-	connectionChannel, err := p.getChannel()
-	if err != nil {
-		return false, err
-	}
-
 	body, err := p.makeData(data)
 	if err != nil {
 		return false, err
 	}
 
-	ch, err := connectionChannel.PublishWithDeferredConfirmWithContext(ctx, p.exchange, p.routingKey, p.mandatory, p.immediate, amqp091.Publishing{
+	ch, err := p.ch.PublishWithDeferredConfirmWithContext(ctx, p.exchange, p.routingKey, p.mandatory, p.immediate, amqp091.Publishing{
 		Headers:       p.headers,
 		ContentType:   p.contentType,
 		DeliveryMode:  p.deliveryMode,
@@ -274,18 +263,6 @@ func (p *Publisher) PublishWithConfirmation(ctx context.Context, data interface{
 	}
 
 	return ch.WaitContext(ctx)
-}
-
-func (p *Publisher) getChannel() (*amqp091.Channel, error) {
-	if p.ch != nil {
-		return p.ch, nil
-	}
-
-	if p.conn == nil {
-		return nil, ConnectionNotSetError
-	}
-
-	return p.conn.Channel()
 }
 
 func (p *Publisher) waitForResponse(ctx context.Context, correlationID string, ch chan amqp091.Delivery) (amqp091.Delivery, error) {
