@@ -73,9 +73,10 @@ func TestPublisher_Publish(t *testing.T) {
 		}
 	}()
 
-	err = rmq.NewPublisher(ch, "", "").
-		SetDataTypeBytes().
-		SetExpiration(time.Second*5).
+	err = rmq.NewPublisherWithChannel(ch, "", "").New().
+		WithFields(rmq.NewPublishFields().
+			SetDataTypeBytes().
+			SetExpiration(time.Second*5)).
 		Publish(context.Background(), []byte("Hello there"))
 	if err != nil {
 		panic(err)

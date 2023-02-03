@@ -25,7 +25,7 @@ func TestConsumer_ConsumeWithResponses(t *testing.T) {
 
 	queueName := "events"
 
-	queue, err := rmq.NewQueueBuilder(ch, queueName).Declare()
+	queue, err := rmq.NewQueueBuilder(ch).Declare()
 	if err != nil {
 		panic(err)
 	}
@@ -35,10 +35,15 @@ func TestConsumer_ConsumeWithResponses(t *testing.T) {
 	go consumer(conn, queue.Name)
 	// go consumer2(conn, queue.Name, responseQueue)
 
-	response, err := rmq.NewPublisherWithChannel(conn, "", queueName).
+	publisher, err := rmq.NewPublisher(conn, "", queueName)
+	if err != nil {
+		panic(err)
+	}
+
+	response, err := publisher.WithFields(rmq.NewPublishFields().
 		SetDataTypeBytes().
 		SetCorrelationID("1").
-		SetResponseTimeout(time.Second*2).
+		SetResponseTimeout(time.Second*2)).New().
 		PublishAwaitResponse(context.Background(), []byte("Hello 2"), responseQueue)
 	if err != nil {
 		panic(err)
@@ -63,41 +68,16 @@ func consumer(conn *amqp091.Connection, queueName string) {
 		panic(err)
 	}
 
+	publisher := rmq.NewPublisherWithChannel(ch, "", queueName)
+
 	clientQueue := fmt.Sprintf("%s_client", queueName)
 	fmt.Println(clientQueue)
 	for delivery := range consumer {
 		delivery.Ack(false)
 		if delivery.CorrelationId != "" {
-			err = rmq.NewPublisherWithChannel(conn, "", queueName).
+			err = publisher.New().WithFields(rmq.NewPublishFields().
 				SetReplyToID(delivery.CorrelationId).
-				SetDataTypeBytes().
-				Publish(context.Background(), []byte("Got you!"))
-			if err != nil {
-				panic(err)
-			}
-		}
-	}
-}
-
-func consumerClient(conn *amqp091.Connection, queueName string, responseQueue *genericSync.Map[rmq.DeliveryChannel]) {
-	ch, err := conn.Channel()
-	if err != nil {
-		panic(err)
-	}
-	defer ch.Close()
-
-	consumer, err := rmq.NewConsumer(ch, "", queueName).
-		Consume()
-	if err != nil {
-		panic(err)
-	}
-
-	for delivery := range consumer {
-		delivery.Ack(false)
-		if delivery.CorrelationId != "" {
-			err = rmq.NewPublisherWithChannel(conn, "", queueName).
-				SetReplyToID(delivery.CorrelationId).
-				SetDataTypeBytes().
+				SetDataTypeBytes()).
 				Publish(context.Background(), []byte("Got you!"))
 			if err != nil {
 				panic(err)
