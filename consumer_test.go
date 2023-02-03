@@ -30,7 +30,7 @@ func TestConsumer_ConsumeWithResponses(t *testing.T) {
 		panic(err)
 	}
 
-	responseQueue := &genericSync.Map[rmq.DeliveryChannel]{}
+	responseQueue := &genericSync.Map[chan amqp091.Delivery]{}
 
 	go consumer(conn, queue.Name)
 	// go consumer2(conn, queue.Name, responseQueue)

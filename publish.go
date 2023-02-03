@@ -56,7 +56,8 @@ func (p *Publish) Publish(ctx context.Context, data interface{}) error {
 //	If an outsider writes the response to that map it checks for the reply to id to see if it matches the correlation id
 //	Fails upon an invalid correlation id or in case of a timeout
 func (p *Publish) PublishAwaitResponse(
-	ctx context.Context, data interface{}, responseMap *genericSync.Map[DeliveryChannel]) (amqp091.Delivery, error) {
+	ctx context.Context, data interface{},
+	responseMap *genericSync.Map[chan amqp091.Delivery]) (amqp091.Delivery, error) {
 
 	if p.fields.responseTimeout == 0 {
 		return amqp091.Delivery{}, ResponseTimeoutNotSetError

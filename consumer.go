@@ -71,7 +71,9 @@ func (c *Consumer) Consume() (<-chan amqp091.Delivery, error) {
 
 // ConsumeWithResponses acts as a middleware and writes to response channel if the delivery contains replyTo
 // - ignoreResponses set to true will ignore delivering the events with replyTo available to the output channel
-func (c *Consumer) ConsumeWithResponses(deliveryQueue *genericSync.Map[DeliveryChannel], ignoreResponses bool) (<-chan amqp091.Delivery, error) {
+func (c *Consumer) ConsumeWithResponses(
+	deliveryQueue *genericSync.Map[chan amqp091.Delivery], ignoreResponses bool) (<-chan amqp091.Delivery, error) {
+
 	if deliveryQueue == nil {
 		return nil, deliveryQueueNotSet
 	}
@@ -93,8 +95,8 @@ func (c *Consumer) ConsumeWithResponses(deliveryQueue *genericSync.Map[DeliveryC
 }
 
 func (c *Consumer) deliver(
-	source <-chan amqp091.Delivery, target chan<- amqp091.Delivery, deliveryQueue *genericSync.Map[DeliveryChannel],
-	ignoreResponses bool) {
+	source <-chan amqp091.Delivery, target chan<- amqp091.Delivery,
+	deliveryQueue *genericSync.Map[chan amqp091.Delivery], ignoreResponses bool) {
 
 	for delivery := range source {
 		// fmt.Println(fmt.Sprintf("CorrelationID: %s - ReplyTo: %s", delivery.CorrelationId, delivery.ReplyTo))
