@@ -19,37 +19,62 @@ type Exchange struct {
 	args       map[string]interface{}
 }
 
-func NewExchange(ch *amqp091.Channel, name string) *Exchange {
-	return &Exchange{
-		ch:           ch,
-		exchangeType: amqp091.DefaultExchange,
-		args:         map[string]interface{}{},
-		name:         name,
+func NewExchange(conn *amqp091.Connection, name string) (*Exchange, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, err
 	}
+
+	return newExchange(ch, name, amqp091.DefaultExchange), nil
 }
 
-func NewFanoutExchange(ch *amqp091.Channel, name string) *Exchange {
-	return &Exchange{
-		ch:           ch,
-		exchangeType: amqp091.ExchangeFanout,
-		args:         map[string]interface{}{},
-		name:         name,
-	}
+func NewExchangeWithChannel(ch *amqp091.Channel, name string) *Exchange {
+	return newExchange(ch, name, amqp091.DefaultExchange)
 }
 
-func NewDirectExchange(ch *amqp091.Channel, name string) *Exchange {
-	return &Exchange{
-		ch:           ch,
-		exchangeType: amqp091.ExchangeDirect,
-		args:         map[string]interface{}{},
-		name:         name,
+func NewFanoutExchange(conn *amqp091.Connection, name string) (*Exchange, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, err
 	}
+
+	return newExchange(ch, name, amqp091.ExchangeFanout), nil
 }
 
-func NewTopicExchange(ch *amqp091.Channel, name string) *Exchange {
+func NewFanoutExchangeWithChannel(ch *amqp091.Channel, name string) *Exchange {
+	return newExchange(ch, name, amqp091.ExchangeFanout)
+}
+
+func NewDirectExchange(conn *amqp091.Connection, name string) (*Exchange, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+
+	return newExchange(ch, name, amqp091.ExchangeDirect), nil
+}
+
+func NewDirectExchangeWithChannel(ch *amqp091.Channel, name string) *Exchange {
+	return newExchange(ch, name, amqp091.ExchangeDirect)
+}
+
+func NewTopicExchange(conn *amqp091.Connection, name string) (*Exchange, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+
+	return newExchange(ch, name, amqp091.ExchangeTopic), nil
+}
+
+func NewTopicExchangeWithChannel(ch *amqp091.Channel, name string) *Exchange {
+	return newExchange(ch, name, amqp091.ExchangeTopic)
+}
+
+func newExchange(ch *amqp091.Channel, name, exchangeType string) *Exchange {
 	return &Exchange{
 		ch:           ch,
-		exchangeType: amqp091.ExchangeTopic,
+		exchangeType: exchangeType,
 		args:         map[string]interface{}{},
 		name:         name,
 	}
