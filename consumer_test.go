@@ -62,7 +62,7 @@ func consumer(conn *amqp091.Connection, queueName string) {
 	}
 	defer ch.Close()
 
-	consumer, err := rmq.NewConsumer(ch, "", queueName).
+	consumer, err := rmq.NewConsumerWithChannel(ch, "", queueName).
 		Consume()
 	if err != nil {
 		panic(err)

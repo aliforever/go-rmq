@@ -22,13 +22,27 @@ type Consumer struct {
 	args      map[string]interface{}
 }
 
-func NewConsumer(ch *amqp091.Channel, name, queueName string) *Consumer {
+func NewConsumerWithChannel(ch *amqp091.Channel, name, queueName string) *Consumer {
 	return &Consumer{
 		ch:        ch,
 		name:      name,
 		queueName: queueName,
 		args:      map[string]interface{}{},
 	}
+}
+
+func NewConsumer(conn *amqp091.Connection, name, queueName string) (*Consumer, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Consumer{
+		ch:        ch,
+		name:      name,
+		queueName: queueName,
+		args:      map[string]interface{}{},
+	}, nil
 }
 
 func (c *Consumer) SetAutoAck() *Consumer {
