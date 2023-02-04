@@ -94,6 +94,10 @@ func (c *Consumer) ConsumeWithResponses(
 	return outputChan, nil
 }
 
+func (c *Consumer) Cancel(noWait bool) error {
+	return c.ch.Cancel(c.name, noWait)
+}
+
 func (c *Consumer) deliver(
 	source <-chan amqp091.Delivery, target chan<- amqp091.Delivery,
 	deliveryQueue *genericSync.Map[chan amqp091.Delivery], ignoreResponses bool) {
