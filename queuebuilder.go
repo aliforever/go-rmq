@@ -17,14 +17,14 @@ type QueueBuilder struct {
 	args       map[string]interface{}
 }
 
-func NewQueueBuilder(ch *amqp091.Channel) *QueueBuilder {
+func NewQueueBuilderWithChannel(ch *amqp091.Channel) *QueueBuilder {
 	return &QueueBuilder{
 		ch:   ch,
 		args: map[string]interface{}{},
 	}
 }
 
-func NewQueueBuilderWithChannel(conn *amqp091.Connection) *QueueBuilder {
+func NewQueueBuilder(conn *amqp091.Connection) *QueueBuilder {
 	return &QueueBuilder{
 		conn: conn,
 		args: map[string]interface{}{},

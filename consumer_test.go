@@ -25,7 +25,7 @@ func TestConsumer_ConsumeWithResponses(t *testing.T) {
 
 	queueName := "events"
 
-	queue, err := rmq.NewQueueBuilder(ch).Declare()
+	queue, err := rmq.NewQueueBuilderWithChannel(ch).Declare()
 	if err != nil {
 		panic(err)
 	}
