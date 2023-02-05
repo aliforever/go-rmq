@@ -43,6 +43,20 @@ func NewPublisher(conn *amqp091.Connection, exchange string, routingKey string) 
 	return &Publisher{ch: ch, exchange: exchange, routingKey: routingKey, fields: NewPublishFields()}, nil
 }
 
+func NewPublisherWithConfirmation(conn *amqp091.Connection, exchange string, routingKey string) (*Publisher, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+
+	err = ch.Confirm(false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Publisher{ch: ch, exchange: exchange, routingKey: routingKey, fields: NewPublishFields()}, nil
+}
+
 func (p *Publisher) WithFields(fields *PublishFields) *Publisher {
 	p.fields = fields
 
