@@ -74,19 +74,19 @@ func (c *Channel) QueueBuilder() *QueueBuilder {
 	return newQueueBuilder(c, c.retryTimes, c.retryDelay)
 }
 
-func (c *Channel) NewExchangeBuilder(name string) *ExchangeBuilder {
+func (c *Channel) ExchangeBuilder(name string) *ExchangeBuilder {
 	return newExchangeBuilder(c, c.retryTimes, c.retryDelay, name, amqp091.DefaultExchange)
 }
 
-func (c *Channel) NewFanoutExchangeBuilder(name string) *ExchangeBuilder {
+func (c *Channel) FanoutExchangeBuilder(name string) *ExchangeBuilder {
 	return newExchangeBuilder(c, c.retryTimes, c.retryDelay, name, amqp091.ExchangeFanout)
 }
 
-func (c *Channel) NewDirectExchangeBuilder(name string) *ExchangeBuilder {
+func (c *Channel) DirectExchangeBuilder(name string) *ExchangeBuilder {
 	return newExchangeBuilder(c, c.retryTimes, c.retryDelay, name, amqp091.ExchangeDirect)
 }
 
-func (c *Channel) NewTopicExchangeBuilder(name string) *ExchangeBuilder {
+func (c *Channel) TopicExchangeBuilder(name string) *ExchangeBuilder {
 	return newExchangeBuilder(c, c.retryTimes, c.retryDelay, name, amqp091.ExchangeTopic)
 }
 
