@@ -1,131 +1,121 @@
 package rmq
 
 import (
-	"errors"
-	genericSync "github.com/aliforever/go-generic-sync-map"
+	"fmt"
 	"github.com/rabbitmq/amqp091-go"
-)
-
-var (
-	deliveryQueueNotSet = errors.New("delivery_queue_not_set")
+	"time"
 )
 
 type Consumer struct {
-	ch *amqp091.Channel
+	consumerBuilder *ConsumerBuilder
 
-	name      string
-	queueName string
-	autoAck   bool
-	exclusive bool
-	noLocal   bool
-	noWait    bool
-	args      map[string]interface{}
+	delivery chan amqp091.Delivery
+
+	errChan chan error
 }
 
-func NewConsumerWithChannel(ch *amqp091.Channel, name, queueName string) *Consumer {
-	return &Consumer{
-		ch:        ch,
-		name:      name,
-		queueName: queueName,
-		args:      map[string]interface{}{},
-	}
-}
-
-func NewConsumer(conn *amqp091.Connection, name, queueName string) (*Consumer, error) {
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, err
+func newConsumer(
+	consumerBuilder *ConsumerBuilder,
+	retryCount int,
+	retryDuration time.Duration,
+) (*Consumer, error) {
+	consumer := &Consumer{
+		consumerBuilder: consumerBuilder,
+		delivery:        make(chan amqp091.Delivery),
+		errChan:         make(chan error),
 	}
 
-	return &Consumer{
-		ch:        ch,
-		name:      name,
-		queueName: queueName,
-		args:      map[string]interface{}{},
-	}, nil
-}
+	tried := retryCount
 
-func (c *Consumer) SetAutoAck() *Consumer {
-	c.autoAck = true
-
-	return c
-}
-
-func (c *Consumer) SetExclusive() *Consumer {
-	c.exclusive = true
-
-	return c
-}
-
-func (c *Consumer) SetNoLocal() *Consumer {
-	c.noLocal = true
-
-	return c
-}
-
-func (c *Consumer) SetNoWait() *Consumer {
-	c.noWait = true
-
-	return c
-}
-
-func (c *Consumer) AddArg(key string, val interface{}) *Consumer {
-	c.args[key] = val
-
-	return c
-}
-
-func (c *Consumer) Consume() (<-chan amqp091.Delivery, error) {
-	if len(c.args) == 0 {
-		c.args = nil
-	}
-
-	return c.ch.Consume(c.queueName, c.name, c.autoAck, c.exclusive, c.noLocal, c.noWait, c.args)
-}
-
-// ConsumeWithResponses acts as a middleware and writes to response channel if the delivery contains replyTo
-// - ignoreResponses set to true will ignore delivering the events with replyTo available to the output channel
-func (c *Consumer) ConsumeWithResponses(
-	deliveryQueue *genericSync.Map[chan amqp091.Delivery], ignoreResponses bool) (<-chan amqp091.Delivery, error) {
-
-	if deliveryQueue == nil {
-		return nil, deliveryQueueNotSet
-	}
-
-	var outputChan = make(chan amqp091.Delivery)
-
-	if len(c.args) == 0 {
-		c.args = nil
-	}
-
-	ch, err := c.ch.Consume(c.queueName, c.name, c.autoAck, c.exclusive, c.noLocal, c.noWait, c.args)
-	if err != nil {
-		return nil, err
-	}
-
-	go c.deliver(ch, outputChan, deliveryQueue, ignoreResponses)
-
-	return outputChan, nil
-}
-
-func (c *Consumer) Cancel(noWait bool) error {
-	return c.ch.Cancel(c.name, noWait)
-}
-
-func (c *Consumer) deliver(
-	source <-chan amqp091.Delivery, target chan<- amqp091.Delivery,
-	deliveryQueue *genericSync.Map[chan amqp091.Delivery], ignoreResponses bool) {
-
-	for delivery := range source {
-		// fmt.Println(fmt.Sprintf("CorrelationID: %s - ReplyTo: %s", delivery.CorrelationId, delivery.ReplyTo))
-		if delivery.ReplyTo != "" {
-			if ch, exists := deliveryQueue.LoadAndDelete(delivery.ReplyTo); exists {
-				ch <- delivery
-			}
-			if ignoreResponses {
-				continue
-			}
+	var (
+		consumerChan <-chan amqp091.Delivery
+		err          error
+	)
+	for tried > 0 {
+		consumerChan, err = consumerBuilder.channel.channel().Consume(
+			consumerBuilder.queueName,
+			consumerBuilder.name,
+			consumerBuilder.autoAck,
+			consumerBuilder.exclusive,
+			consumerBuilder.noLocal,
+			consumerBuilder.noWait,
+			consumerBuilder.args,
+		)
+		if err != nil {
+			tried--
+			time.Sleep(retryDuration)
+			continue
 		}
-		target <- delivery
+
+		stopChan := make(chan bool)
+
+		go consumer.process(stopChan, consumerChan)
+
+		go consumer.keepAlive(stopChan)
+
+		return consumer, nil
 	}
+
+	return nil, fmt.Errorf("failed to create consumer after %d retries: %s", retryCount, err)
+}
+
+func (c *Consumer) Messages() <-chan amqp091.Delivery {
+	return c.delivery
+}
+
+// ErrorChan returns a channel that will receive an error when the consumer is closed
+func (c *Consumer) ErrorChan() <-chan error {
+	return c.errChan
+}
+
+// Cancel stops the consumer
+func (c *Consumer) Cancel() error {
+	return c.consumerBuilder.channel.channel().Cancel(c.consumerBuilder.name, false)
+}
+
+func (c *Consumer) process(stopChan chan bool, consumer <-chan amqp091.Delivery) {
+	for delivery := range consumer {
+		c.delivery <- delivery
+	}
+
+	stopChan <- true
+}
+
+// keepAlive keeps the consumer alive by recreating it when it's closed
+func (c *Consumer) keepAlive(stopChan chan bool) {
+	tried := c.consumerBuilder.retryCount
+
+	var (
+		consumerChan <-chan amqp091.Delivery
+		err          error
+	)
+
+	for tried > 0 {
+		<-stopChan
+
+		consumerChan, err = c.consumerBuilder.channel.channel().Consume(
+			c.consumerBuilder.queueName,
+			c.consumerBuilder.name,
+			c.consumerBuilder.autoAck,
+			c.consumerBuilder.exclusive,
+			c.consumerBuilder.noLocal,
+			c.consumerBuilder.noWait,
+			c.consumerBuilder.args,
+		)
+		if err != nil {
+			tried--
+			time.Sleep(c.consumerBuilder.retryDelay)
+			continue
+		}
+
+		go c.process(stopChan, consumerChan)
+
+		tried = c.consumerBuilder.retryCount
+	}
+
+	c.errChan <- fmt.Errorf(
+		"failed to create consumer after %d retries: %s",
+		c.consumerBuilder.retryCount-tried,
+		err,
+	)
 }

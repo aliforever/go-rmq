@@ -8,8 +8,6 @@ import (
 )
 
 type PublishFields struct {
-	responseTimeout time.Duration
-
 	dataType      dataType
 	contentType   string
 	deliveryMode  uint8
@@ -23,12 +21,6 @@ type PublishFields struct {
 
 func NewPublishFields() *PublishFields {
 	return &PublishFields{headers: map[string]interface{}{}}
-}
-
-func (p *PublishFields) SetResponseTimeout(timeout time.Duration) *PublishFields {
-	p.responseTimeout = timeout
-
-	return p
 }
 
 func (p *PublishFields) SetDataTypeBytes() *PublishFields {
