@@ -32,7 +32,18 @@ func newConsumer(
 		err          error
 	)
 	for tried > 0 {
-		consumerChan, err = consumerBuilder.channel.channel().Consume(
+		ch := consumerBuilder.channel.channel()
+
+		if consumerBuilder.prefetch > 0 {
+			err = ch.Qos(consumerBuilder.prefetch, 0, false)
+			if err != nil {
+				tried--
+				time.Sleep(retryDuration)
+				continue
+			}
+		}
+
+		consumerChan, err = ch.Consume(
 			consumerBuilder.queueName,
 			consumerBuilder.name,
 			consumerBuilder.autoAck,

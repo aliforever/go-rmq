@@ -12,14 +12,14 @@ var (
 type ConsumerBuilder struct {
 	channel *Channel
 
-	name      string
-	queueName string
-	autoAck   bool
-	exclusive bool
-	noLocal   bool
-	noWait    bool
-	args      map[string]interface{}
-
+	name       string
+	queueName  string
+	autoAck    bool
+	exclusive  bool
+	noLocal    bool
+	noWait     bool
+	args       map[string]interface{}
+	prefetch   int
 	retryCount int
 	retryDelay time.Duration
 }
@@ -61,6 +61,12 @@ func (c *ConsumerBuilder) SetNoLocal() *ConsumerBuilder {
 
 func (c *ConsumerBuilder) SetNoWait() *ConsumerBuilder {
 	c.noWait = true
+
+	return c
+}
+
+func (c *ConsumerBuilder) SetPrefetch(prefetch int) *ConsumerBuilder {
+	c.prefetch = prefetch
 
 	return c
 }
