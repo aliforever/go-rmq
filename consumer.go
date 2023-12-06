@@ -124,6 +124,8 @@ func (c *Consumer) keepAlive(stopChan chan bool) {
 		tried = c.consumerBuilder.retryCount
 	}
 
+	close(c.delivery)
+
 	c.errChan <- fmt.Errorf(
 		"failed to create consumer after %d retries: %s",
 		c.consumerBuilder.retryCount-tried,
