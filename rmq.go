@@ -32,6 +32,8 @@ func New(address string) *RMQ {
 }
 
 // SetOnError sets the error handler
+//
+// Important: It will block the reconnection so make sure to use goroutine in the callback
 func (r *RMQ) SetOnError(onError func(err error)) {
 	r.onError = onError
 }
@@ -63,6 +65,9 @@ func (r *RMQ) Connect(retryCount int, retryDelay time.Duration) (<-chan error, e
 	for tries > 0 {
 		conn, err = amqp091.Dial(r.address)
 		if err != nil {
+			if r.onError != nil {
+				r.onError(err)
+			}
 			tries--
 			time.Sleep(retryDelay)
 			continue
