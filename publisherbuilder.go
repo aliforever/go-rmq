@@ -20,6 +20,12 @@ const (
 	DataTypeJSON
 )
 
+type PublisherBuilderImpl interface {
+	WithFields(fields *PublishFields) PublisherBuilderImpl
+	New() PublisherImpl
+	NewWithDefaultFields() PublisherImpl
+}
+
 type PublisherBuilder struct {
 	ch *Channel
 

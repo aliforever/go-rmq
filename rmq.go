@@ -9,6 +9,14 @@ import (
 
 var ConnectionClosedError = fmt.Errorf("connection_closed")
 
+type RmqImpl interface {
+	SetOnError(onError func(err error))
+	Connect(retryCount int, retryDelay time.Duration, onRetryError func(err error)) (<-chan error, error)
+	Close() error
+	NewChannel() (ChannelImpl, error)
+	NewChannelWithConfirm() (ChannelImpl, error)
+}
+
 type RMQ struct {
 	address string
 
@@ -20,7 +28,7 @@ type RMQ struct {
 	retryCount int
 	retryDelay time.Duration
 
-	onError func(err error)
+	onRetryError func(err error)
 }
 
 func New(address string) *RMQ {
@@ -31,16 +39,16 @@ func New(address string) *RMQ {
 	}
 }
 
-// SetOnError sets the error handler
+// Connect
 //
-// Important: It will block the reconnection so make sure to use goroutine in the callback
-func (r *RMQ) SetOnError(onError func(err error)) {
-	r.onError = onError
-}
-
-func (r *RMQ) Connect(retryCount int, retryDelay time.Duration) (<-chan error, error) {
+// Important: onRetryError It will block the reconnection so make sure to use goroutine in the callback
+func (r *RMQ) Connect(retryCount int, retryDelay time.Duration, onRetryError func(err error)) (<-chan error, error) {
 	r.connMutex.Lock()
 	defer r.connMutex.Unlock()
+
+	if onRetryError != nil {
+		r.onRetryError = onRetryError
+	}
 
 	if retryCount == 0 {
 		retryCount = 5
@@ -65,8 +73,8 @@ func (r *RMQ) Connect(retryCount int, retryDelay time.Duration) (<-chan error, e
 	for tries > 0 {
 		conn, err = amqp091.Dial(r.address)
 		if err != nil {
-			if r.onError != nil {
-				r.onError(err)
+			if r.onRetryError != nil {
+				r.onRetryError(err)
 			}
 			tries--
 			time.Sleep(retryDelay)

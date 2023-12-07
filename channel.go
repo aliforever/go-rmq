@@ -7,6 +7,17 @@ import (
 	"time"
 )
 
+type ChannelImpl interface {
+	PublisherBuilder(exchange string, routingKey string) PublisherBuilderImpl
+	ConsumerBuilder(name, queue string) ConsumerBuilderImpl
+	QueueBuilder() QueueBuilderImpl
+	ExchangeBuilder(name string) ExchangeBuilderImpl
+	FanoutExchangeBuilder(name string) ExchangeBuilderImpl
+	DirectExchangeBuilder(name string) ExchangeBuilderImpl
+	TopicExchangeBuilder(name string) ExchangeBuilderImpl
+	CloseChan() <-chan error
+}
+
 type Channel struct {
 	m sync.Mutex
 

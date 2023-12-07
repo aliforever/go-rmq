@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+type PublishFieldsImpl interface {
+	SetDataTypeBytes() PublisherBuilderImpl
+	SetDataTypeJSON() PublisherBuilderImpl
+	SetContentType(contentType string) PublisherBuilderImpl
+	DeliveryModePersistent() PublisherBuilderImpl
+	DeliveryModeTransient() PublisherBuilderImpl
+	AddHeader(key string, val interface{}) PublisherBuilderImpl
+	SetCorrelationID(id string) PublisherBuilderImpl
+	SetReplyToID(id string) PublisherBuilderImpl
+	SetExpiration(dur time.Duration) PublisherBuilderImpl
+	SetMandatory() PublisherBuilderImpl
+	SetImmediate() PublisherBuilderImpl
+}
+
 type PublishFields struct {
 	dataType      dataType
 	contentType   string

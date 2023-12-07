@@ -6,6 +6,16 @@ import (
 	"time"
 )
 
+type QueueImpl interface {
+	Name() string
+	BindToExchange(
+		exchange string,
+		routingKey string,
+		noWait bool,
+		args map[string]interface{},
+	) error
+}
+
 type Queue struct {
 	queueBuilder *QueueBuilder
 

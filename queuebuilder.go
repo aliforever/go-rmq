@@ -4,6 +4,16 @@ import (
 	"time"
 )
 
+type QueueBuilderImpl interface {
+	SetName(name string) QueueBuilderImpl
+	SetDurable() QueueBuilderImpl
+	SetAutoDelete() QueueBuilderImpl
+	SetExclusive() QueueBuilderImpl
+	SetNoWait() QueueBuilderImpl
+	AddArg(key string, val interface{}) QueueBuilderImpl
+	Declare() (QueueImpl, error)
+}
+
 type QueueBuilder struct {
 	channel      *Channel
 	exchangeName string

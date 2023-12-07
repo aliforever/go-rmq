@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+type PublisherImpl interface {
+	WithFields(fields PublishFieldsImpl) PublisherImpl
+	Fields() PublishFieldsImpl
+	Publish(ctx context.Context, data interface{}) error
+	PublishAwaitResponse(
+		ctx context.Context,
+		data interface{},
+		responseMap *genericSync.Map[chan amqp091.Delivery],
+	) (amqp091.Delivery, error)
+	PublishWithConfirmation(ctx context.Context, data interface{}) (bool, error)
+}
+
 type Publisher struct {
 	ch         *Channel
 	exchange   string

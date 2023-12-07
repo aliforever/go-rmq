@@ -9,6 +9,16 @@ var (
 	deliveryQueueNotSet = errors.New("delivery_queue_not_set")
 )
 
+type ConsumerBuilderImpl interface {
+	SetAutoAck() ConsumerBuilderImpl
+	SetExclusive() ConsumerBuilderImpl
+	SetNoLocal() ConsumerBuilderImpl
+	SetNoWait() ConsumerBuilderImpl
+	SetPrefetch(prefetch int) ConsumerBuilderImpl
+	AddArg(key string, val interface{}) ConsumerBuilderImpl
+	Build() (ConsumerImpl, error)
+}
+
 type ConsumerBuilder struct {
 	channel *Channel
 

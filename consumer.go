@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+type ConsumerImpl interface {
+	Messages() <-chan amqp091.Delivery
+	ErrorChan() <-chan error
+	Cancel() error
+}
+
 type Consumer struct {
 	consumerBuilder *ConsumerBuilder
 

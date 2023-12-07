@@ -5,6 +5,16 @@ import (
 	"time"
 )
 
+type ExchangeBuilderImpl interface {
+	DeleteOnDeclare(ifUnused, noWait bool) ExchangeBuilderImpl
+	SetDurable() ExchangeBuilderImpl
+	SetAutoDelete() ExchangeBuilderImpl
+	SetInternal() ExchangeBuilderImpl
+	SetNoWait() ExchangeBuilderImpl
+	AddArg(key string, val interface{}) ExchangeBuilderImpl
+	Declare() error
+}
+
 type ExchangeBuilder struct {
 	channel *Channel
 
