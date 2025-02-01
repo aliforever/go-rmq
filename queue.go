@@ -2,8 +2,9 @@ package rmq
 
 import (
 	"fmt"
-	"github.com/rabbitmq/amqp091-go"
 	"time"
+
+	"github.com/rabbitmq/amqp091-go"
 )
 
 type QueueImpl interface {
@@ -82,4 +83,8 @@ func (q *Queue) BindToExchange(
 	}
 
 	return fmt.Errorf("failed to bind queue to exchange after %d tries: %s", q.queueBuilder.retryCount, err)
+}
+
+func (q *Queue) ConsumerCount() int {
+	return q.queue.Consumers
 }
