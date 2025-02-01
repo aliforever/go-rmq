@@ -30,8 +30,14 @@ func newQueue(builder *QueueBuilder) (*Queue, error) {
 
 	var err error
 
+	fn := builder.channel.channel().QueueDeclare
+
+	if builder.passive {
+		fn = builder.channel.channel().QueueDeclarePassive
+	}
+
 	for leftTries > 0 {
-		qb.queue, err = builder.channel.channel().QueueDeclare(
+		qb.queue, err = fn(
 			builder.name,
 			builder.durable,
 			builder.autoDelete,

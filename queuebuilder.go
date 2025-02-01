@@ -23,6 +23,7 @@ type QueueBuilder struct {
 	autoDelete bool
 	exclusive  bool
 	noWait     bool
+	passive    bool
 	args       map[string]interface{}
 
 	retryCount int
@@ -64,6 +65,12 @@ func (q *QueueBuilder) SetExclusive() *QueueBuilder {
 
 func (q *QueueBuilder) SetNoWait() *QueueBuilder {
 	q.noWait = true
+
+	return q
+}
+
+func (q *QueueBuilder) SetPassive() *QueueBuilder {
+	q.passive = true
 
 	return q
 }
