@@ -2,9 +2,10 @@ package rmq
 
 import (
 	"fmt"
-	"github.com/rabbitmq/amqp091-go"
 	"sync"
 	"time"
+
+	"github.com/rabbitmq/amqp091-go"
 )
 
 type ChannelImpl interface {

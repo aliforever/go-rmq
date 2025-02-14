@@ -31,7 +31,7 @@ func initRabbitMqConnectionChannel() (*amqp091.Connection, error) {
 func TestPublisher_Publish(t *testing.T) {
 	r := rmq.New(amqpURL)
 
-	closeChan, err := r.Connect(5, time.Second*6)
+	closeChan, err := r.Connect(5, time.Second*6, nil)
 	if err != nil {
 		panic(err)
 	}

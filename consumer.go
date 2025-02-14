@@ -2,8 +2,9 @@ package rmq
 
 import (
 	"fmt"
-	"github.com/rabbitmq/amqp091-go"
 	"time"
+
+	"github.com/rabbitmq/amqp091-go"
 )
 
 type ConsumerImpl interface {
@@ -108,26 +109,29 @@ func (c *Consumer) keepAlive(stopChan chan bool) {
 	)
 
 	for tried > 0 {
-		<-stopChan
+		select {
+		case <-stopChan:
+			consumerChan, err = c.consumerBuilder.channel.channel().Consume(
+				c.consumerBuilder.queueName,
+				c.consumerBuilder.name,
+				c.consumerBuilder.autoAck,
+				c.consumerBuilder.exclusive,
+				c.consumerBuilder.noLocal,
+				c.consumerBuilder.noWait,
+				c.consumerBuilder.args,
+			)
+			if err != nil {
+				tried--
+				time.Sleep(c.consumerBuilder.retryDelay)
+				continue
+			}
 
-		consumerChan, err = c.consumerBuilder.channel.channel().Consume(
-			c.consumerBuilder.queueName,
-			c.consumerBuilder.name,
-			c.consumerBuilder.autoAck,
-			c.consumerBuilder.exclusive,
-			c.consumerBuilder.noLocal,
-			c.consumerBuilder.noWait,
-			c.consumerBuilder.args,
-		)
-		if err != nil {
-			tried--
-			time.Sleep(c.consumerBuilder.retryDelay)
-			continue
+			go c.process(stopChan, consumerChan)
+
+			tried = c.consumerBuilder.retryCount
+		case <-c.consumerBuilder.channel.closeChan:
+			break
 		}
-
-		go c.process(stopChan, consumerChan)
-
-		tried = c.consumerBuilder.retryCount
 	}
 
 	close(c.delivery)
