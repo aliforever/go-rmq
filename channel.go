@@ -17,6 +17,7 @@ type ChannelImpl interface {
 	DirectExchangeBuilder(name string) ExchangeBuilderImpl
 	TopicExchangeBuilder(name string) ExchangeBuilderImpl
 	CloseChan() <-chan error
+	Close() error
 }
 
 type Channel struct {
@@ -104,6 +105,13 @@ func (c *Channel) TopicExchangeBuilder(name string) *ExchangeBuilder {
 
 func (c *Channel) CloseChan() <-chan error {
 	return c.closeChan
+}
+
+func (c *Channel) Close() error {
+	c.m.Lock()
+	defer c.m.Unlock()
+
+	return c.ch.Close()
 }
 
 // keepAlive keeps the channel alive
