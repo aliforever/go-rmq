@@ -134,12 +134,14 @@ func (c *Channel) keepAlive(
 
 		closeNotifier, err = c.reconnect(withConfirm)
 		if err != nil {
-			c.closeChan <- fmt.Errorf(
-				"failed to create a channel after %d tries: %s - %s",
-				c.retryTimes,
-				lastCloseErr,
-				err,
-			)
+			go func() {
+				c.closeChan <- fmt.Errorf(
+					"failed to create a channel after %d tries: %s - %s",
+					c.retryTimes,
+					lastCloseErr,
+					err,
+				)
+			}()
 
 			return
 		}
