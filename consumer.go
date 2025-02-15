@@ -1,6 +1,7 @@
 package rmq
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -101,6 +102,8 @@ func (c *Consumer) process(stopChan chan bool, consumer <-chan amqp091.Delivery)
 
 // keepAlive keeps the consumer alive by recreating it when it's closed
 func (c *Consumer) keepAlive(stopChan chan bool) {
+	defer close(c.delivery)
+
 	tried := c.consumerBuilder.retryCount
 
 	var (
@@ -130,11 +133,10 @@ func (c *Consumer) keepAlive(stopChan chan bool) {
 
 			tried = c.consumerBuilder.retryCount
 		case <-c.consumerBuilder.channel.closeChan:
-			break
+			c.errChan <- errors.New("failed to create consumer due to channel failure")
+			return
 		}
 	}
-
-	close(c.delivery)
 
 	c.errChan <- fmt.Errorf(
 		"failed to create consumer after %d retries: %s",
