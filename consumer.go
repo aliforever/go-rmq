@@ -20,6 +20,8 @@ type Consumer struct {
 	delivery chan amqp091.Delivery
 
 	errChan chan error
+
+	consumerClosedChan chan error
 }
 
 func newConsumer(
@@ -28,10 +30,13 @@ func newConsumer(
 	retryDuration time.Duration,
 ) (*Consumer, error) {
 	consumer := &Consumer{
-		consumerBuilder: consumerBuilder,
-		delivery:        make(chan amqp091.Delivery),
-		errChan:         make(chan error),
+		consumerBuilder:    consumerBuilder,
+		delivery:           make(chan amqp091.Delivery),
+		errChan:            make(chan error),
+		consumerClosedChan: make(chan error),
 	}
+
+	consumerBuilder.channel.addCloseChannel(consumer.consumerClosedChan)
 
 	tried := retryCount
 
@@ -66,11 +71,9 @@ func newConsumer(
 			continue
 		}
 
-		stopChan := make(chan bool)
+		go consumer.process(consumerChan)
 
-		go consumer.process(stopChan, consumerChan)
-
-		go consumer.keepAlive(stopChan)
+		go consumer.keepAlive()
 
 		return consumer, nil
 	}
@@ -92,17 +95,17 @@ func (c *Consumer) Cancel() error {
 	return c.consumerBuilder.channel.channel().Cancel(c.consumerBuilder.name, false)
 }
 
-func (c *Consumer) process(stopChan chan bool, consumer <-chan amqp091.Delivery) {
+func (c *Consumer) process(consumer <-chan amqp091.Delivery) {
 	for delivery := range consumer {
 		c.delivery <- delivery
 	}
-
-	stopChan <- true
 }
 
 // keepAlive keeps the consumer alive by recreating it when it's closed
-func (c *Consumer) keepAlive(stopChan chan bool) {
+func (c *Consumer) keepAlive() {
 	defer close(c.delivery)
+
+	stopChan := make(chan bool)
 
 	tried := c.consumerBuilder.retryCount
 
@@ -124,17 +127,24 @@ func (c *Consumer) keepAlive(stopChan chan bool) {
 				c.consumerBuilder.args,
 			)
 			if err != nil {
+				fmt.Println("failed to create consumer 1", err)
 				tried--
 				time.Sleep(c.consumerBuilder.retryDelay)
 				continue
 			}
 
-			go c.process(stopChan, consumerChan)
+			go c.process(consumerChan)
 
 			tried = c.consumerBuilder.retryCount
-		case <-c.consumerBuilder.channel.closeChan:
-			c.errChan <- errors.New("failed to create consumer due to channel failure")
-			return
+		case closeErr := <-c.consumerClosedChan:
+			if closeErr == nil {
+				c.errChan <- errors.New("failed to create consumer due to channel failure")
+				return
+			}
+
+			go func() {
+				stopChan <- true
+			}()
 		}
 	}
 

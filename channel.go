@@ -31,6 +31,8 @@ type Channel struct {
 	retryDelay time.Duration
 
 	closeChan chan error
+
+	closeChannels []chan error
 }
 
 func newChannel(rmq *RMQ, retryTimes int, retryDelay time.Duration, withConfirm bool) (*Channel, error) {
@@ -72,7 +74,11 @@ func newChannel(rmq *RMQ, retryTimes int, retryDelay time.Duration, withConfirm 
 		return c, nil
 	}
 
-	return nil, fmt.Errorf("failed to create channel after %d retries: %s", retryTimes, err)
+	err = fmt.Errorf("failed to create channel after %d retries: %s", retryTimes, err)
+
+	go c.signalClose(err)
+
+	return nil, err
 }
 
 func (c *Channel) PublisherBuilder(exchange string, routingKey string) *PublisherBuilder {
@@ -122,20 +128,27 @@ func (c *Channel) keepAlive(
 	var (
 		err          error
 		lastCloseErr *amqp091.Error
+		closeChan    = make(chan error)
 	)
 
 	for {
 		select {
 		case lastCloseErr = <-closeNotifier:
+			if lastCloseErr == nil {
+				c.signalClose(nil)
+				return
+			}
+
 			break
-		case <-c.closeChan:
+		case closeErr := <-closeChan:
+			c.signalClose(closeErr)
 			return
 		}
 
 		closeNotifier, err = c.reconnect(withConfirm)
 		if err != nil {
 			go func() {
-				c.closeChan <- fmt.Errorf(
+				closeChan <- fmt.Errorf(
 					"failed to create a channel after %d tries: %s - %s",
 					c.retryTimes,
 					lastCloseErr,
@@ -190,4 +203,27 @@ func (c *Channel) channel() *amqp091.Channel {
 	defer c.m.Unlock()
 
 	return c.ch
+}
+
+func (c *Channel) addCloseChannel(closeChan chan error) {
+	c.m.Lock()
+	defer c.m.Unlock()
+
+	c.closeChannels = append(c.closeChannels, closeChan)
+}
+
+func (c *Channel) signalClose(err error) {
+	c.m.Lock()
+	defer c.m.Unlock()
+
+	go func() {
+		c.closeChan <- err
+		close(c.closeChan)
+	}()
+
+	for _, closeChan := range c.closeChannels {
+		go func(closeChan chan error, err error) {
+			closeChan <- err
+		}(closeChan, err)
+	}
 }
