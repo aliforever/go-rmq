@@ -127,7 +127,6 @@ func (c *Consumer) keepAlive() {
 				c.consumerBuilder.args,
 			)
 			if err != nil {
-				fmt.Println("failed to create consumer 1", err)
 				tried--
 				time.Sleep(c.consumerBuilder.retryDelay)
 				continue

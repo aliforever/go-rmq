@@ -134,8 +134,9 @@ func (c *Channel) keepAlive(
 	for {
 		select {
 		case lastCloseErr = <-closeNotifier:
+			c.signalClose(lastCloseErr)
+
 			if lastCloseErr == nil {
-				c.signalClose(nil)
 				return
 			}
 
@@ -216,10 +217,12 @@ func (c *Channel) signalClose(err error) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	go func() {
-		c.closeChan <- err
-		close(c.closeChan)
-	}()
+	if err == nil {
+		go func() {
+			c.closeChan <- err
+			close(c.closeChan)
+		}()
+	}
 
 	for _, closeChan := range c.closeChannels {
 		go func(closeChan chan error, err error) {
