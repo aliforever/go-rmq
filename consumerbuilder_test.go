@@ -2,15 +2,18 @@ package rmq_test
 
 import (
 	"fmt"
-	"github.com/aliforever/go-rmq"
 	"testing"
 	"time"
+
+	"github.com/aliforever/go-rmq"
 )
 
 func TestConsumerBuilder(t *testing.T) {
 	r := rmq.New(amqpURL)
 
-	closeChan, err := r.Connect(5, time.Second*5)
+	closeChan, err := r.Connect(5, time.Second*5, func(err error) {
+		fmt.Println(err)
+	})
 	if err != nil {
 		panic(err)
 	}

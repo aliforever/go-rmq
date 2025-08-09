@@ -1,8 +1,10 @@
 package rmq
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -18,67 +20,102 @@ type ChannelImpl interface {
 	TopicExchangeBuilder(name string) ExchangeBuilderImpl
 	CloseChan() <-chan error
 	Close() error
+	IsHealthy() bool
 }
 
 type Channel struct {
-	m sync.Mutex
+	mu sync.RWMutex
 
 	rmq *RMQ
-
-	ch *amqp091.Channel
+	ch  *amqp091.Channel
 
 	retryTimes int
 	retryDelay time.Duration
 
-	closeChan chan error
-
+	closeChan     chan error
 	closeChannels []chan error
+
+	// Improved lifecycle management
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closeOnce sync.Once
+	wg        sync.WaitGroup
+	healthy   int32 // atomic flag for health status
+
+	// Connection state
+	isConnected int32 // atomic flag
 }
 
 func newChannel(rmq *RMQ, retryTimes int, retryDelay time.Duration, withConfirm bool) (*Channel, error) {
-	timesTried := retryTimes
+	ctx, cancel := context.WithCancel(context.Background())
 
 	c := &Channel{
 		rmq:        rmq,
-		closeChan:  make(chan error),
+		closeChan:  make(chan error, 1),
 		retryTimes: retryTimes,
 		retryDelay: retryDelay,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
-	var (
-		ch  *amqp091.Channel
-		err error
-	)
+	if err := c.connect(withConfirm); err != nil {
+		c.Close()
+		return nil, err
+	}
+
+	c.wg.Add(1)
+	go c.keepAlive(withConfirm)
+
+	return c, nil
+}
+
+func (c *Channel) connect(withConfirm bool) error {
+	timesTried := c.retryTimes
+	var err error
 
 	for timesTried > 0 {
-		ch, err = rmq.conn.Channel()
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		default:
+		}
+
+		ch, err := c.rmq.conn.Channel()
 		if err != nil {
 			timesTried--
-			time.Sleep(retryDelay)
+			if timesTried > 0 {
+				time.Sleep(c.retryDelay)
+			}
 			continue
 		}
 
+		c.mu.Lock()
 		c.ch = ch
+		c.mu.Unlock()
 
 		if withConfirm {
-			err = ch.Confirm(false)
-			if err != nil {
-				return nil, fmt.Errorf("failed to set channel in confirm mode: %s", err)
+			if err = ch.Confirm(false); err != nil {
+				ch.Close()
+				timesTried--
+				if timesTried > 0 {
+					time.Sleep(c.retryDelay)
+				}
+				continue
 			}
 		}
 
-		timesTried = retryTimes
-
-		go c.keepAlive(ch.NotifyClose(make(chan *amqp091.Error)), withConfirm)
-
-		return c, nil
+		atomic.StoreInt32(&c.isConnected, 1)
+		atomic.StoreInt32(&c.healthy, 1)
+		return nil
 	}
 
-	err = fmt.Errorf("failed to create channel after %d retries: %s", retryTimes, err)
+	atomic.StoreInt32(&c.isConnected, 0)
+	atomic.StoreInt32(&c.healthy, 0)
+	return fmt.Errorf("failed to create channel after %d retries: %w", c.retryTimes, err)
+}
 
-	go c.signalClose(err)
-
-	return nil, err
+func (c *Channel) IsHealthy() bool {
+	return atomic.LoadInt32(&c.healthy) == 1
 }
 
 func (c *Channel) PublisherBuilder(exchange string, routingKey string) *PublisherBuilder {
@@ -114,119 +151,152 @@ func (c *Channel) CloseChan() <-chan error {
 }
 
 func (c *Channel) Close() error {
-	c.m.Lock()
-	defer c.m.Unlock()
+	var err error
+	c.closeOnce.Do(func() {
+		c.cancel()
 
-	return c.ch.Close()
+		c.mu.Lock()
+		if c.ch != nil {
+			err = c.ch.Close()
+		}
+		c.mu.Unlock()
+
+		atomic.StoreInt32(&c.isConnected, 0)
+		atomic.StoreInt32(&c.healthy, 0)
+
+		// Wait for goroutines with timeout
+		done := make(chan struct{})
+		go func() {
+			c.wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+
+		c.signalClose(nil)
+	})
+	return err
 }
 
-// keepAlive keeps the channel alive
-func (c *Channel) keepAlive(
-	closeNotifier chan *amqp091.Error,
-	withConfirm bool,
-) {
-	var (
-		err          error
-		lastCloseErr *amqp091.Error
-		closeChan    = make(chan error)
-	)
+func (c *Channel) keepAlive(withConfirm bool) {
+	defer c.wg.Done()
+
+	// Set up close notification
+	c.mu.RLock()
+	ch := c.ch
+	c.mu.RUnlock()
+
+	if ch == nil {
+		return
+	}
+
+	closeNotifier := ch.NotifyClose(make(chan *amqp091.Error, 1))
 
 	for {
 		select {
-		case lastCloseErr = <-closeNotifier:
-			c.signalClose(lastCloseErr)
+		case <-c.ctx.Done():
+			return
 
-			if lastCloseErr == nil {
+		case closeErr := <-closeNotifier:
+			atomic.StoreInt32(&c.isConnected, 0)
+			atomic.StoreInt32(&c.healthy, 0)
+
+			if closeErr == nil {
+				// Clean shutdown
+				c.signalClose(nil)
 				return
 			}
 
-			break
-		case closeErr := <-closeChan:
 			c.signalClose(closeErr)
-			return
-		}
 
-		closeNotifier, err = c.reconnect(withConfirm)
-		if err != nil {
-			go func() {
-				closeChan <- fmt.Errorf(
-					"failed to create a channel after %d tries: %s - %s",
-					c.retryTimes,
-					lastCloseErr,
-					err,
-				)
-			}()
+			// Attempt reconnection
+			if err := c.reconnect(withConfirm); err != nil {
+				c.signalClose(fmt.Errorf("failed to reconnect channel: %w", err))
+				return
+			}
 
-			return
+			// Set up new close notification
+			c.mu.RLock()
+			ch := c.ch
+			c.mu.RUnlock()
+
+			if ch == nil {
+				return
+			}
+
+			closeNotifier = ch.NotifyClose(make(chan *amqp091.Error, 1))
 		}
 	}
 }
 
-// reconnect reconnects the channel
-func (c *Channel) reconnect(withConfirm bool) (chan *amqp091.Error, error) {
-	c.m.Lock()
-	defer c.m.Unlock()
+func (c *Channel) reconnect(withConfirm bool) error {
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+	maxRetries := c.retryTimes
 
-	timesTried := c.retryTimes
-
-	var (
-		ch  *amqp091.Channel
-		err error
-	)
-
-	for timesTried > 0 {
-		ch, err = c.rmq.conn.Channel()
-		if err != nil {
-			timesTried--
-			time.Sleep(c.retryDelay)
-			continue
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		default:
 		}
 
-		c.ch = ch
+		if err := c.connect(withConfirm); err == nil {
+			return nil
+		}
 
-		if withConfirm {
-			err = ch.Confirm(false)
-			if err != nil {
-				return nil, fmt.Errorf("failed to set channel in confirm mode: %s", err)
+		if attempt < maxRetries-1 {
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
 			}
 		}
-
-		timesTried = c.retryTimes
-
-		return ch.NotifyClose(make(chan *amqp091.Error)), nil
 	}
 
-	return nil, fmt.Errorf("failed to reconnect channel after %d retries: %s", c.retryTimes, err)
+	return fmt.Errorf("failed to reconnect channel after %d attempts", maxRetries)
 }
 
 func (c *Channel) channel() *amqp091.Channel {
-	c.m.Lock()
-	defer c.m.Unlock()
-
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.ch
 }
 
 func (c *Channel) addCloseChannel(closeChan chan error) {
-	c.m.Lock()
-	defer c.m.Unlock()
-
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.closeChannels = append(c.closeChannels, closeChan)
 }
 
 func (c *Channel) signalClose(err error) {
-	c.m.Lock()
-	defer c.m.Unlock()
+	c.mu.RLock()
+	channels := make([]chan error, len(c.closeChannels))
+	copy(channels, c.closeChannels)
+	c.mu.RUnlock()
 
-	if err == nil {
-		go func() {
-			c.closeChan <- err
-			close(c.closeChan)
-		}()
+	// Signal main close channel
+	select {
+	case c.closeChan <- err:
+	default:
 	}
 
-	for _, closeChan := range c.closeChannels {
-		go func(closeChan chan error, err error) {
-			closeChan <- err
-		}(closeChan, err)
+	// Signal all registered close channels
+	for _, closeChan := range channels {
+		select {
+		case closeChan <- err:
+		default:
+		}
+	}
+
+	// Close main channel only on clean shutdown
+	if err == nil {
+		select {
+		case <-time.After(100 * time.Millisecond):
+			close(c.closeChan)
+		}
 	}
 }

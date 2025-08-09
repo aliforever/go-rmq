@@ -1,10 +1,13 @@
 package rmq
 
 import (
+	"context"
 	"fmt"
-	"github.com/rabbitmq/amqp091-go"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/rabbitmq/amqp091-go"
 )
 
 var ConnectionClosedError = fmt.Errorf("connection_closed")
@@ -15,33 +18,58 @@ type RmqImpl interface {
 	Close() error
 	NewChannel() (ChannelImpl, error)
 	NewChannelWithConfirm() (ChannelImpl, error)
+	IsConnected() bool
+	IsHealthy() bool
 }
 
 type RMQ struct {
 	address string
 
-	connMutex     sync.Mutex
-	conn          *amqp091.Connection
-	closeNotifier chan *amqp091.Error
-	stopChan      chan bool
+	connMutex sync.RWMutex
+	conn      *amqp091.Connection
 
 	retryCount int
 	retryDelay time.Duration
 
 	onRetryError func(err error)
+
+	// Improved lifecycle management
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closeOnce sync.Once
+	wg        sync.WaitGroup
+
+	// Connection state
+	connected int32 // atomic flag
+	healthy   int32 // atomic flag
+
+	// Error handling
+	errChan chan error
 }
 
 func New(address string) *RMQ {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &RMQ{
-		address:       address,
-		closeNotifier: make(chan *amqp091.Error),
-		stopChan:      make(chan bool, 1),
+		address: address,
+		ctx:     ctx,
+		cancel:  cancel,
+		errChan: make(chan error, 1),
 	}
 }
 
-// Connect
-//
-// Important: onRetryError It will block the reconnection so make sure to use goroutine in the callback
+func (r *RMQ) IsConnected() bool {
+	return atomic.LoadInt32(&r.connected) == 1
+}
+
+func (r *RMQ) IsHealthy() bool {
+	return atomic.LoadInt32(&r.healthy) == 1
+}
+
+func (r *RMQ) SetOnError(onError func(err error)) {
+	// This method can be implemented if needed for additional error handling
+}
+
 func (r *RMQ) Connect(retryCount int, retryDelay time.Duration, onRetryError func(err error)) (<-chan error, error) {
 	r.connMutex.Lock()
 	defer r.connMutex.Unlock()
@@ -61,135 +89,197 @@ func (r *RMQ) Connect(retryCount int, retryDelay time.Duration, onRetryError fun
 	r.retryCount = retryCount
 	r.retryDelay = retryDelay
 
-	errChan := make(chan error)
+	if err := r.connect(); err != nil {
+		return nil, err
+	}
 
-	tries := retryCount
+	// Start keep-alive goroutine
+	r.wg.Add(1)
+	go r.keepAlive()
 
-	var (
-		conn *amqp091.Connection
-		err  error
-	)
+	return r.errChan, nil
+}
+
+func (r *RMQ) connect() error {
+	tries := r.retryCount
+	var err error
 
 	for tries > 0 {
-		conn, err = amqp091.Dial(r.address)
+		select {
+		case <-r.ctx.Done():
+			return r.ctx.Err()
+		default:
+		}
+
+		conn, err := amqp091.Dial(r.address)
 		if err != nil {
 			if r.onRetryError != nil {
 				r.onRetryError(err)
 			}
 			tries--
-			time.Sleep(retryDelay)
+			if tries > 0 {
+				time.Sleep(r.retryDelay)
+			}
 			continue
 		}
 
 		r.conn = conn
-
-		tries = retryCount
-
-		go r.keepAlive(errChan, r.conn.NotifyClose(make(chan *amqp091.Error)), retryCount, retryDelay)
-
-		return errChan, nil
+		atomic.StoreInt32(&r.connected, 1)
+		atomic.StoreInt32(&r.healthy, 1)
+		return nil
 	}
 
-	return nil, fmt.Errorf("failed to connect to RabbitMQ after %d tries: %s", retryCount, err)
+	atomic.StoreInt32(&r.connected, 0)
+	atomic.StoreInt32(&r.healthy, 0)
+	return fmt.Errorf("failed to connect to RabbitMQ after %d tries: %w", r.retryCount, err)
 }
 
 func (r *RMQ) Close() error {
-	r.connMutex.Lock()
-	defer r.connMutex.Unlock()
+	var err error
+	r.closeOnce.Do(func() {
+		r.cancel()
 
-	defer func() {
-		r.stopChan <- true
-	}()
+		r.connMutex.Lock()
+		if r.conn != nil {
+			err = r.conn.Close()
+		}
+		r.connMutex.Unlock()
 
-	if r.conn != nil {
-		return r.conn.Close()
-	}
+		atomic.StoreInt32(&r.connected, 0)
+		atomic.StoreInt32(&r.healthy, 0)
 
-	return nil
+		// Wait for goroutines with timeout
+		done := make(chan struct{})
+		go func() {
+			r.wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+
+		close(r.errChan)
+	})
+	return err
 }
 
 func (r *RMQ) NewChannel() (*Channel, error) {
+	if !r.IsConnected() {
+		return nil, ConnectionClosedError
+	}
 	return newChannel(r, r.retryCount, r.retryDelay, false)
 }
 
 func (r *RMQ) NewChannelWithConfirm() (*Channel, error) {
+	if !r.IsConnected() {
+		return nil, ConnectionClosedError
+	}
 	return newChannel(r, r.retryCount, r.retryDelay, true)
 }
 
-func (r *RMQ) keepAlive(
-	errChan chan error,
-	closeNotifier chan *amqp091.Error,
-	retryCount int,
-	retryDelay time.Duration,
-) {
+func (r *RMQ) keepAlive() {
+	defer r.wg.Done()
 
-	timesTried := retryCount
+	r.connMutex.RLock()
+	conn := r.conn
+	r.connMutex.RUnlock()
 
-	var (
-		err          error
-		lastCloseErr error
-	)
+	if conn == nil {
+		return
+	}
 
-	stopCh := make(chan bool)
+	closeNotifier := conn.NotifyClose(make(chan *amqp091.Error, 1))
+	ticker := time.NewTicker(30 * time.Second) // Health check every 30 seconds
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-r.stopChan:
-			go func() {
-				stopCh <- true
-			}()
-			errChan <- r.conn.Close()
+		case <-r.ctx.Done():
 			return
-		case lastCloseErr = <-closeNotifier:
-			go func() {
-				stopCh <- false
-			}()
-			// wait for a second before reconnecting to make sure the connection is not forcefully closed
-			time.Sleep(time.Second * 1)
-			continue
-		case val := <-stopCh:
-			if !val {
-				break
-			} else {
+
+		case closeErr := <-closeNotifier:
+			atomic.StoreInt32(&r.connected, 0)
+			atomic.StoreInt32(&r.healthy, 0)
+
+			if closeErr == nil {
+				// Clean shutdown
+				select {
+				case r.errChan <- nil:
+				default:
+				}
 				return
 			}
-		}
 
-		closeNotifier, err = r.reconnect(timesTried, retryDelay)
-		if err != nil {
-			errChan <- fmt.Errorf(
-				"failed to connect to RabbitMQ after %d tries: %s - %s",
-				retryCount,
-				lastCloseErr,
-				err,
-			)
+			// Signal error
+			select {
+			case r.errChan <- closeErr:
+			default:
+			}
 
-			return
+			// Attempt reconnection
+			if err := r.reconnect(); err != nil {
+				select {
+				case r.errChan <- fmt.Errorf("failed to reconnect: %w", err):
+				default:
+				}
+				return
+			}
+
+			// Set up new close notification
+			r.connMutex.RLock()
+			conn := r.conn
+			r.connMutex.RUnlock()
+
+			if conn == nil {
+				return
+			}
+
+			closeNotifier = conn.NotifyClose(make(chan *amqp091.Error, 1))
+
+		case <-ticker.C:
+			// Periodic health check
+			if !r.IsConnected() {
+				if err := r.reconnect(); err != nil {
+					select {
+					case r.errChan <- fmt.Errorf("health check reconnection failed: %w", err):
+					default:
+					}
+					return
+				}
+			}
 		}
 	}
 }
 
-func (r *RMQ) reconnect(tryCount int, retryDelay time.Duration) (chan *amqp091.Error, error) {
-	r.connMutex.Lock()
-	defer r.connMutex.Unlock()
+func (r *RMQ) reconnect() error {
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+	maxRetries := r.retryCount
 
-	timesTried := tryCount
-
-	var lastErr error
-
-	for timesTried > 0 {
-		conn, err := amqp091.Dial(r.address)
-		if err != nil {
-			timesTried--
-			time.Sleep(retryDelay)
-			lastErr = err
-			continue
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		select {
+		case <-r.ctx.Done():
+			return r.ctx.Err()
+		default:
 		}
 
-		r.conn = conn
+		r.connMutex.Lock()
+		if err := r.connect(); err == nil {
+			r.connMutex.Unlock()
+			return nil
+		}
+		r.connMutex.Unlock()
 
-		return r.conn.NotifyClose(make(chan *amqp091.Error)), nil
+		if attempt < maxRetries-1 {
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
 	}
 
-	return nil, fmt.Errorf("failed to connect to RabbitMQ after %d tries: %s", tryCount, lastErr)
+	return fmt.Errorf("failed to reconnect after %d attempts", maxRetries)
 }
