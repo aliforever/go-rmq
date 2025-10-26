@@ -61,7 +61,6 @@ func (oup *OnUpdateOptions) SetLogger(logger *slog.Logger) *OnUpdateOptions {
 func OnUpdate[T any](
 	client *RMQ,
 	queueName string,
-	prefetchCount int,
 	handler func(*T) error,
 	opts *OnUpdateOptions,
 ) error {
@@ -76,7 +75,7 @@ func OnUpdate[T any](
 
 	consumer, err := consumerChannel.
 		ConsumerBuilder("", queueName).
-		SetPrefetch(prefetchCount).
+		SetPrefetch(opts.prefetchCount).
 		Build()
 	if err != nil {
 		return err
