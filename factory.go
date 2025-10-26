@@ -68,21 +68,13 @@ func OnUpdate[T any](
 		opts = NewOnUpdateOptions()
 	}
 
-	consumerChannel, err := client.NewChannel()
-	if err != nil {
-		return err
-	}
-
-	consumer, err := consumerChannel.
-		ConsumerBuilder("", queueName).
-		SetPrefetch(opts.prefetchCount).
-		Build()
-	if err != nil {
-		return err
-	}
-
 	if opts.createQueue {
-		builder := consumerChannel.
+		createQueueChannel, err := client.NewChannel()
+		if err != nil {
+			return err
+		}
+
+		builder := createQueueChannel.
 			QueueBuilder().
 			SetName(queueName)
 
@@ -94,6 +86,19 @@ func OnUpdate[T any](
 		if err != nil {
 			return err
 		}
+	}
+
+	consumerChannel, err := client.NewChannel()
+	if err != nil {
+		return err
+	}
+
+	consumer, err := consumerChannel.
+		ConsumerBuilder("", queueName).
+		SetPrefetch(opts.prefetchCount).
+		Build()
+	if err != nil {
+		return err
 	}
 
 	for delivery := range consumer.Messages() {
